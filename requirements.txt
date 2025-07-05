@@ -2,3 +2,4 @@ aiogram==3.4.1
 google-generativeai
 pillow
 httpx[http2]
+psycopg2-binary
