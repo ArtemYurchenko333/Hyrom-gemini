@@ -324,7 +324,7 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                "max_output_tokens": 500, # Уменьшаем количество токенов для более короткого ответа
+                "max_output_tokens": 300, # Уменьшаем количество токенов для более короткого ответа
             },
             stream=False # Убедимся, что не стримим, чтобы получить полный response сразу
         )
