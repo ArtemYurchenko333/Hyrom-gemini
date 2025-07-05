@@ -7,9 +7,9 @@ from io import BytesIO
 import google.generativeai as genai
 from PIL import Image
 
-import psycopg2 # Импортируем библиотеку для работы с PostgreSQL
+import psycopg2
 from psycopg2 import sql
-from concurrent.futures import ThreadPoolExecutor # Для асинхронных операций с БД
+from concurrent.futures import ThreadPoolExecutor
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 # Получение токенов из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
-DATABASE_URL = os.getenv("DATABASE_URL4") # Переменная окружения для подключения к БД
+DATABASE_URL = os.getenv("DATABASE_URL4")
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
@@ -73,15 +73,20 @@ def init_db(db_url):
             );
         """)
         # Таблица для фотографий ладоней
+        # ДОБАВЛЕНЫ ПОЛЯ first_name, last_name, telegram_username
         cur.execute("""
             CREATE TABLE IF NOT EXISTS palm_photos (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT REFERENCES users(id),
                 telegram_file_id VARCHAR(255) NOT NULL,
+                first_name VARCHAR(255),
+                last_name VARCHAR(255),
+                telegram_username VARCHAR(255),
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         # Таблица для ответов хиромантии
+        # ДОБАВЛЕНЫ ПОЛЯ first_name, last_name, telegram_username
         cur.execute("""
             CREATE TABLE IF NOT EXISTS palm_readings (
                 id SERIAL PRIMARY KEY,
@@ -89,6 +94,9 @@ def init_db(db_url):
                 photo_id INT REFERENCES palm_photos(id),
                 prompt_text TEXT NOT NULL,
                 ai_response TEXT NOT NULL,
+                first_name VARCHAR(255),
+                last_name VARCHAR(255),
+                telegram_username VARCHAR(255),
                 read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -97,8 +105,8 @@ def init_db(db_url):
     except Exception as e:
         logging.error(f"Ошибка при инициализации базы данных: {e}")
         if conn:
-            conn.rollback() # Откатываем транзакцию в случае ошибки
-        raise # Перевыбрасываем исключение, чтобы остановить запуск бота, если БД недоступна
+            conn.rollback()
+        raise
     finally:
         if conn:
             conn.close()
@@ -137,19 +145,20 @@ def get_or_create_user_db(db_url: str, user: User) -> int:
         if conn:
             conn.close()
 
-def save_photo_info_db(db_url: str, user_id: int, telegram_file_id: str) -> int:
-    """Сохраняет информацию о фотографии ладони в БД."""
+# ИЗМЕНЕНА ФУНКЦИЯ: save_photo_info_db теперь принимает first_name, last_name, telegram_username
+def save_photo_info_db(db_url: str, user_id: int, telegram_file_id: str, first_name: str, last_name: str, telegram_username: str) -> int:
+    """Сохраняет информацию о фотографии ладони в БД, включая данные пользователя."""
     conn = None
     try:
         conn = get_db_connection(db_url)
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO palm_photos (user_id, telegram_file_id)
-            VALUES (%s, %s)
+            INSERT INTO palm_photos (user_id, telegram_file_id, first_name, last_name, telegram_username)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id;
             """,
-            (user_id, telegram_file_id)
+            (user_id, telegram_file_id, first_name, last_name, telegram_username)
         )
         photo_id = cur.fetchone()[0]
         conn.commit()
@@ -164,18 +173,19 @@ def save_photo_info_db(db_url: str, user_id: int, telegram_file_id: str) -> int:
         if conn:
             conn.close()
 
-def save_ai_reading_db(db_url: str, user_id: int, photo_id: int, prompt_text: str, ai_response: str):
-    """Сохраняет ответ ИИ по хиромантии в БД."""
+# ИЗМЕНЕНА ФУНКЦИЯ: save_ai_reading_db теперь принимает first_name, last_name, telegram_username
+def save_ai_reading_db(db_url: str, user_id: int, photo_id: int, prompt_text: str, ai_response: str, first_name: str, last_name: str, telegram_username: str):
+    """Сохраняет ответ ИИ по хиромантии в БД, включая данные пользователя."""
     conn = None
     try:
         conn = get_db_connection(db_url)
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO palm_readings (user_id, photo_id, prompt_text, ai_response)
-            VALUES (%s, %s, %s, %s);
+            INSERT INTO palm_readings (user_id, photo_id, prompt_text, ai_response, first_name, last_name, telegram_username)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
             """,
-            (user_id, photo_id, prompt_text, ai_response)
+            (user_id, photo_id, prompt_text, ai_response, first_name, last_name, telegram_username)
         )
         conn.commit()
         logging.info(f"Ответ ИИ для пользователя {user_id} (photo_id: {photo_id}) сохранен.")
@@ -196,17 +206,16 @@ async def handle_photo(message: Message):
     Обработчик сообщений с фотографиями.
     После получения фото показывает сообщение, ждет 3 секунды,
     затем отправляет предопределенный промт и фото в Gemini API,
-    а также сохраняет данные в БД.
+    а также сохраняет данные в БД, включая имя, фамилию и ник.
     """
     user_id = message.from_user.id
     telegram_user = message.from_user
-    processing_message = None # Инициализируем на случай ошибки до его создания
+    processing_message = None
 
     try:
         logging.info(f"Получено фото от пользователя {user_id}")
 
-        # 1. Получаем или создаем пользователя в БД
-        # Выполняем синхронную операцию в отдельном потоке
+        # Получаем или создаем пользователя в БД
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             get_or_create_user_db,
@@ -214,26 +223,33 @@ async def handle_photo(message: Message):
             telegram_user
         )
 
-        # 2. Показываем сообщение "Спасибо..."
+        # ДОБАВЛЕНО: Извлекаем имя, фамилию и ник пользователя
+        first_name = telegram_user.first_name if telegram_user.first_name else ""
+        last_name = telegram_user.last_name if telegram_user.last_name else ""
+        telegram_username = telegram_user.username if telegram_user.username else ""
+
+        # Измененное сообщение "Спасибо..."
         processing_message = await message.reply("Спасибо за предоставленное изображение! Идет обработка...")
 
-        # 3. Ждем 3 секунды (или сколько нужно для имитации обработки)
+        # Задержка в 3 секунды для имитации обработки (уже была в коде)
         await asyncio.sleep(3)
 
-        photo_file_id = message.photo[-1].file_id # Берем самую большую версию фото
-        prompt_text = PREDEFINED_PROMPT # Используем предопределенный промт
+        photo_file_id = message.photo[-1].file_id
+        prompt_text = PREDEFINED_PROMPT
 
-        # 4. Сохраняем информацию о фото в БД
-        # Выполняем синхронную операцию в отдельном потоке
+        # Сохраняем информацию о фото в БД, передавая новые поля
         photo_db_id = await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_photo_info_db,
             DATABASE_URL,
             user_id,
-            photo_file_id
+            photo_file_id,
+            first_name, # Передаем first_name
+            last_name,  # Передаем last_name
+            telegram_username # Передаем telegram_username
         )
 
-        # 5. Загрузка файла фотографии из Telegram и отправка в Gemini API
+        # Загрузка файла фотографии из Telegram и отправка в Gemini API
         file = await bot.get_file(photo_file_id)
         file_bytes_io = await bot.download_file(file.file_path)
         file_content = file_bytes_io.read()
@@ -252,8 +268,7 @@ async def handle_photo(message: Message):
         ai_response_text = response.text
         logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
 
-        # 6. Сохраняем ответ ИИ в БД
-        # Выполняем синхронную операцию в отдельном потоке
+        # Сохраняем ответ ИИ в БД, передавая новые поля
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_ai_reading_db,
@@ -261,24 +276,26 @@ async def handle_photo(message: Message):
             user_id,
             photo_db_id,
             prompt_text,
-            ai_response_text
+            ai_response_text,
+            first_name, # Передаем first_name
+            last_name,  # Передаем last_name
+            telegram_username # Передаем telegram_username
         )
 
-        # 7. Удаляем сообщение "Идет обработка..." перед отправкой ответа
+        # Удаляем сообщение "Идет обработка..." перед отправкой ответа
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
-        # 8. Отправка ответа пользователю
+        # Отправка ответа пользователю
         await message.reply(ai_response_text)
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
-        # Если произошла ошибка, также удаляем сообщение о обработке, если оно еще есть
         if processing_message:
             try:
                 await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
             except Exception:
-                pass # Игнорируем ошибку, если сообщение уже удалено или не существует
+                pass
         await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
 
 
@@ -289,20 +306,16 @@ async def handle_unhandled_messages(message: Message):
     Предоставляет пользователю инструкции.
     """
     logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}")
-    if message.text:
-        await message.reply("Извините, я умею работать только с фотографиями рук. Пожалуйста, отправьте фото своей ладони.")
-    else:
-        await message.reply("Извините, я могу анализировать только фотографии рук. Пожалуйста, отправьте фото.")
+    # ИЗМЕНЕН ТЕКСТ СООБЩЕНИЯ
+    await message.reply("Пожалуйста, поделитесь фотографией вашей ладони для анализа. Я могу анализировать только изображения рук.")
 
 
 if __name__ == "__main__":
-    # Проверяем наличие DATABASE_URL перед запуском
     if not DATABASE_URL:
         logging.error("DATABASE_URL не установлен. Пожалуйста, установите его в переменных окружения.")
         exit(1)
 
     logging.info("Бот запускается...")
-    # Инициализируем БД при запуске бота
     try:
         init_db(DATABASE_URL)
     except Exception as e:
