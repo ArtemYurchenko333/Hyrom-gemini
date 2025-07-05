@@ -47,6 +47,8 @@ PREDEFINED_PROMPT = """Проанализируй ладони по предос
 Пиши професссонально, с опорой на системный подход и лучшие практики анализа ладони. Избегай общих фраз - стремись к конкретике и точности"""
 
 # Максимальное количество символов в одном сообщении Telegram
+# Мы не будем напрямую использовать это для разбиения,
+# но оно служит напоминанием о лимите.
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 # --- Функции для работы с базой данных ---
@@ -216,7 +218,11 @@ async def download_file_by_id(file_id: str) -> BytesIO:
         raise
 
 def split_text_into_chunks(text: str, max_length: int) -> list[str]:
-    """Разбивает текст на части, чтобы каждая часть не превышала max_length."""
+    """
+    Эта функция больше не будет активно использоваться для разбиения,
+    если ответ Gemini будет достаточно коротким.
+    Однако, она оставлена для совместимости и как запасной вариант.
+    """
     chunks = []
     current_chunk = ""
     for paragraph in text.split('\n'):
@@ -318,7 +324,7 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                "max_output_tokens": 800, # Оставляем 800 токенов для более сжатого ответа
+                "max_output_tokens": 500, # Уменьшаем количество токенов для более короткого ответа
             },
             stream=False # Убедимся, что не стримим, чтобы получить полный response сразу
         )
@@ -328,26 +334,23 @@ async def handle_photo(message: Message):
             ai_response_text = response.text.strip()
             logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
             
-            # Добавим более специфичную проверку на отсутствие текста или конкретные причины отказа
-            if not ai_response_text:
-                # Если Gemini не выдал текст, но и не было явной ошибки в response.text
-                # Проверяем причины отказа кандидата, если они есть
-                if hasattr(response.candidates[0], 'finish_reason'):
-                    finish_reason = response.candidates[0].finish_reason
-                    logging.warning(f"Gemini response has no text. Finish reason: {finish_reason}")
-                    if finish_reason == genai.protos.FinishReason.SAFETY or \
-                       finish_reason == genai.protos.FinishReason.OTHER or \
-                       finish_reason == genai.protos.FinishReason.RECITATION: # RECITATION может быть, если модель отказывается генерировать
-                        ai_response_text = "На изображении не удалось распознать руку или оно содержит неподходящий контент."
-                    else:
-                        ai_response_text = "К сожалению, анализ не удался. Пожалуйста, попробуйте позже с другим фото."
+            # Если Gemini не выдал текст, но и не было явной ошибки в response.text
+            # Проверяем причины отказа кандидата, если они есть
+            if not ai_response_text and hasattr(response.candidates[0], 'finish_reason'):
+                finish_reason = response.candidates[0].finish_reason
+                logging.warning(f"Gemini response has no text. Finish reason: {finish_reason}")
+                if finish_reason == genai.protos.FinishReason.SAFETY or \
+                   finish_reason == genai.protos.FinishReason.OTHER or \
+                   finish_reason == genai.protos.FinishReason.RECITATION:
+                    ai_response_text = "На изображении не удалось распознать руку или оно содержит неподходящий контент."
                 else:
                     ai_response_text = "К сожалению, анализ не удался. Пожалуйста, попробуйте позже с другим фото."
+            elif not ai_response_text: # Если нет текста и нет finish_reason (редкий случай)
+                ai_response_text = "К сожалению, анализ не удался. Пожалуйста, попробуйте позже с другим фото."
         else:
             # Если candidates пуст, это обычно означает отказ из-за безопасности или других проблем
             logging.warning(f"Gemini did not return any candidates. Prompt feedback: {response.prompt_feedback}")
             ai_response_text = "На изображении не удалось распознать руку или оно содержит неподходящий контент."
-
 
         # Также сохраним старую проверку на случай, если Gemini все же вернет текстовую ошибку
         # Это более грубый метод, но может поймать edge-кейсы
@@ -384,11 +387,14 @@ async def handle_photo(message: Message):
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
-        # Отправляем ответ пользователю, разбив, если длинный
+        # Отправляем ответ пользователю. Поскольку мы сократили max_output_tokens,
+        # мы ожидаем, что ответ поместится в одно сообщение.
+        # Однако, на всякий случай, функция split_text_into_chunks все еще присутствует.
         chunks = split_text_into_chunks(ai_response_text, TELEGRAM_MAX_MESSAGE_LENGTH)
         for i, chunk in enumerate(chunks):
             await message.reply(chunk)
-            await asyncio.sleep(0.5) # Небольшая задержка между сообщениями, чтобы избежать флуда
+            # Небольшая задержка между сообщениями, хотя теперь это, скорее всего, будет только одно сообщение.
+            await asyncio.sleep(0.5) 
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
