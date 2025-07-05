@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 # Получение токенов из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
-DATABASE_URL = os.getenv("DATABASE_URL") # Переменная окружения для подключения к БД
+DATABASE_URL = os.getenv("DATABASE_URL4") # Переменная окружения для подключения к БД
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
