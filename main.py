@@ -18,8 +18,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
 DATABASE_URL = os.getenv("DATABASE_URL4")
-# НОВОЕ: Переменная окружения для ID чата администратора
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID") # Получаем ID администратора
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
@@ -46,42 +45,6 @@ PREDEFINED_PROMPT = """Проанализируй ладони по предос
 - рекомендации для гармоничного раскрытия моих способностей.
 
 Пиши професссонально, с опорой на системный подход и лучшие практики анализа ладони. Избегай общих фраз - стремись к конкретике и точности"""
-
-# Максимальное количество символов в одном сообщении Telegram
-# Для обычных текстовых сообщений это 4096. Для подписей к фото/видео - 1024.
-# Поскольку наш ответ - это чистый текст, используем 4096.
-TELEGRAM_MESSAGE_MAX_LENGTH = 4096
-
-# --- Вспомогательные функции ---
-
-def split_text_into_chunks(text: str, chunk_size: int) -> list[str]:
-    """
-    Разбивает текст на части (чанками) по заданному размеру,
-    стараясь не разрывать слова на середине.
-    """
-    chunks = []
-    while text:
-        if len(text) <= chunk_size:
-            chunks.append(text)
-            break
-
-        # Ищем ближайший пробел или знак препинания к chunk_size
-        split_index = text.rfind(' ', 0, chunk_size)
-        if split_index == -1: # Если пробелов нет, режем жестко
-            split_index = chunk_size
-        
-        # Убедимся, что мы не создаем пустой чанк или чанк только с пробелами
-        chunk = text[:split_index].strip()
-        if not chunk and split_index < len(text): # Если чанк пуст, но текст еще есть, сдвинемся вперед
-            split_index = text.find(' ', chunk_size) # Ищем первый пробел после chunk_size
-            if split_index == -1: # Если пробелов после chunk_size нет, берем весь остаток
-                split_index = len(text)
-            chunk = text[:split_index].strip()
-
-        chunks.append(chunk)
-        text = text[split_index:].strip() # Удаляем отправленную часть и убираем пробелы в начале
-
-    return [chunk for chunk in chunks if chunk] # Убираем возможные пустые чанки
 
 # --- Функции для работы с базой данных ---
 
@@ -232,7 +195,7 @@ def save_ai_reading_db(db_url: str, user_id: int, photo_id: int, prompt_text: st
         if conn:
             conn.close()
 
-# --- Новая функция для загрузки файла по file_id (из прошлого шага) ---
+# Функция download_file_by_id остается без изменений
 async def download_file_by_id(file_id: str) -> BytesIO:
     """
     Загружает файл из Telegram по его file_id и возвращает его содержимое
@@ -249,6 +212,7 @@ async def download_file_by_id(file_id: str) -> BytesIO:
     except Exception as e:
         logging.error(f"Ошибка при загрузке файла по file_id {file_id}: {e}")
         raise
+
 
 # --- Обработчики сообщений бота ---
 
@@ -299,13 +263,9 @@ async def handle_photo(message: Message):
             telegram_username
         )
 
-        # НОВОЕ: Отправка фото администратору
+        # Отправка фото администратору
         if ADMIN_CHAT_ID:
             try:
-                # Загружаем фото для отправки администратору (потребует повторной загрузки, если не хотите кэшировать)
-                # Или можно использовать file_id напрямую, если бот уже имеет к нему доступ
-                # Для отправки file_id напрямую, можно отправить просто photo=photo_file_id,
-                # но для подписи с данными лучше иметь BytesIO
                 file_for_admin = await download_file_by_id(photo_file_id)
                 caption_for_admin = (
                     f"Новое фото ладони от пользователя:\n"
@@ -315,7 +275,7 @@ async def handle_photo(message: Message):
                 )
                 await bot.send_photo(
                     chat_id=ADMIN_CHAT_ID,
-                    photo=file_for_admin, # Передаем BytesIO
+                    photo=file_for_admin,
                     caption=caption_for_admin
                 )
                 logging.info(f"Фото от пользователя {user_id} отправлено администратору {ADMIN_CHAT_ID}.")
@@ -336,7 +296,9 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                "max_output_tokens": 1024,
+                # Устанавливаем max_output_tokens, чтобы текст поместился в одно сообщение
+                "max_output_tokens": 1024, # Это значение уже было, но оно обычно достаточно для 4096 символов.
+                                           # Если все равно будут проблемы, можно попробовать 900 или 800.
             }
         )
         ai_response_text = response.text
@@ -360,12 +322,8 @@ async def handle_photo(message: Message):
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
-        # НОВОЕ: Отправка ответа пользователю, разбитого на части
-        chunks = split_text_into_chunks(ai_response_text, TELEGRAM_MESSAGE_MAX_LENGTH)
-        for chunk in chunks:
-            await message.reply(chunk)
-            # Небольшая задержка между частями, чтобы избежать проблем с флудом API Telegram
-            await asyncio.sleep(0.5)
+        # НОВОЕ: Отправляем весь ответ целиком, не разбивая на части
+        await message.reply(ai_response_text)
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
@@ -374,7 +332,6 @@ async def handle_photo(message: Message):
                 await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
             except Exception:
                 pass
-        # НОВОЕ: Текст ошибки на русском
         await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
 
 
@@ -385,7 +342,6 @@ async def handle_unhandled_messages(message: Message):
     Предоставляет пользователю инструкции.
     """
     logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}")
-    # НОВОЕ: Текст ошибки на русском
     await message.reply("Пожалуйста, поделитесь фотографией вашей ладони для анализа. Я могу анализировать только изображения рук.")
 
 
@@ -394,10 +350,8 @@ if __name__ == "__main__":
         logging.error("DATABASE_URL не установлен. Пожалуйста, установите его в переменных окружения.")
         exit(1)
 
-    # Добавляем проверку для ADMIN_CHAT_ID
     if ADMIN_CHAT_ID:
         try:
-            # Попытаемся преобразовать в int, чтобы убедиться, что это корректный ID
             int(ADMIN_CHAT_ID)
         except ValueError:
             logging.error("ADMIN_CHAT_ID должен быть числовым ID чата. Проверьте переменную окружения.")
