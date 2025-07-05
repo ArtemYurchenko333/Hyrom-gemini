@@ -297,7 +297,7 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 800,
             }
         )
         ai_response_text = response.text
