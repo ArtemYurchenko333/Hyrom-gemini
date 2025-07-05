@@ -1,115 +1,124 @@
 import os
 import logging
+import asyncio # Импортируем asyncio для задержки
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from io import BytesIO
-import base64
 import google.generativeai as genai
-from PIL import Image # Импортируем Image для работы с изображениями PIL
+from PIL import Image
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
 # Получение токенов из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4") # Изменено на GEMINI_API_KEY
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # Конфигурация Gemini API
-# Убедитесь, что GEMINI_API_KEY установлен в вашей среде Railway
 if not GEMINI_API_KEY:
     logging.error("GEMINI_API_KEY не установлен. Пожалуйста, установите его в переменных окружения Railway.")
-    exit(1) # Выходим, если ключ не установлен
+    exit(1)
 genai.configure(api_key=GEMINI_API_KEY)
 
+# Модель Gemini (уже была изменена на 'gemini-2.0-flash', это хорошо)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-# Словарь для хранения информации о запросах пользователей (например, ID фото)
-user_prompts = {}
+# Ваш предопределенный промт
+PREDEFINED_PROMPT = """Проанализируй ладони по предоставленным фотографиям, используя опыт проессиональной хиромантии.
+
+Обрати внимание на форму кисти, длину и пропорции пальцев, текстуру кожи, рисунок линий (жизни, сердца, ума, судьбы) и их взаимодействие.
+
+Составь глубокий и структурированный портрет моей личности: опиши сильные и слабые стороны характера, особенности мышления, эмоциональную сферу, карьерный потенцыал, природные таланты и вероятные жизненные вызовы.
+Отдельно сделай акцент на:
+- ключевые моменты, когда возможны важные повороты судьбы,
+- скрытые ресурсы, которые стоит развивать,
+- рекомендации для гармоничного раскрытия моих способностей.
+
+Пиши професссонально, с опорой на системный подход и лучшие практики анализа ладони. Избегай общих фраз - стремись к конкретике и точности"""
+
 
 @dp.message(lambda message: message.photo)
 async def handle_photo(message: Message):
     """
     Обработчик сообщений с фотографиями.
-    Сохраняет file_id фотографии и просит пользователя ввести запрос.
-    """
-    logging.info(f"Получено фото от пользователя {message.from_user.id}")
-    await message.reply("✅ Фото получено! Теперь напиши, что ты хочешь узнать по руке (например, 'расскажи про линию судьбы').")
-    user_prompts[message.from_user.id] = {
-        "photo": message.photo[-1].file_id # Берем самую большую версию фото
-    }
-
-@dp.message(lambda message: message.text and message.from_user.id in user_prompts)
-async def handle_prompt(message: Message):
-    """
-    Обработчик текстовых запросов после получения фотографии.
-    Загружает фото, кодирует его, отправляет в Gemini API вместе с текстом запроса
-    и отправляет ответ пользователю.
+    После получения фото показывает сообщение, ждет 3 секунды,
+    затем отправляет предопределенный промт и фото в Gemini API.
     """
     user_id = message.from_user.id
-    logging.info(f"Получен текстовый запрос от пользователя {user_id}")
+    logging.info(f"Получено фото от пользователя {user_id}")
 
-    # Проверяем, есть ли фото для этого пользователя
-    if user_id not in user_prompts or "photo" not in user_prompts[user_id]:
-        await message.reply("Пожалуйста, сначала отправьте фотографию руки.")
-        return
+    # 1. Показываем сообщение "Спасибо..."
+    processing_message = await message.reply("Спасибо за предоставленное изображение! Идет обработка...")
 
-    photo_file_id = user_prompts[user_id]["photo"]
-    prompt_text = message.text
+    # 2. Ждем 3 секунды (или сколько нужно для имитации обработки)
+    await asyncio.sleep(3)
+
+    photo_file_id = message.photo[-1].file_id # Берем самую большую версию фото
+    prompt_text = PREDEFINED_PROMPT # Используем предопределенный промт
 
     try:
         # Загрузка файла фотографии из Telegram
-        file = await bot.get_file(photo_file_id)
-        file_bytes_io = await bot.download_file(file.file_path)
-        file_content = file_bytes_io.read()
+        file = await bot.get_file(photo_file_id) [cite: 6]
+        file_bytes_io = await bot.download_file(file.file_path) [cite: 6]
+        file_content = file_bytes_io.read() [cite: 6]
 
         # Преобразование байтов изображения в объект PIL Image
-        # Gemini API ожидает объект PIL Image или байты изображения напрямую
-        img = Image.open(BytesIO(file_content))
+        img = Image.open(BytesIO(file_content)) [cite: 6]
 
-        logging.info(f"Отправка запроса в Gemini API для пользователя {user_id}")
+        logging.info(f"Отправка запроса в Gemini API для пользователя {user_id} с предопределенным промтом.")
         # Отправка запроса в Gemini API
-        # Gemini Pro Vision принимает список частей: текст и изображение
         response = await model.generate_content_async(
-            [prompt_text, img],
+            [prompt_text, img], # Передаем предопределенный промт и изображение [cite: 7]
             generation_config={
-                "temperature": 0.7,  # Настройте температуру для креативности (0.0-1.0)
-                "top_p": 0.95,       # Настройте top_p для разнообразия
-                "top_k": 0,          # Настройте top_k
-                "max_output_tokens": 1024, # Максимальное количество токенов в ответе
+                "temperature": 0.7,
+                "top_p": 0.95,
+                "top_k": 0,
+                "max_output_tokens": 1024,
             }
         )
         logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
 
+        # Удаляем сообщение "Идет обработка..." перед отправкой ответа
+        await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
+
         # Отправка ответа пользователю
-        await message.reply(response.text)
+        await message.reply(response.text) [cite: 9]
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
-        await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
-    finally:
-        # Очищаем данные пользователя после обработки запроса
-        if user_id in user_prompts:
-            del user_prompts[user_id]
+        # Если произошла ошибка, также удаляем сообщение о обработке, если оно еще есть
+        try:
+            await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
+        except Exception:
+            pass # Игнорируем ошибку, если сообщение уже удалено или не существует
+        await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.") [cite: 10]
 
-@dp.message() # Этот обработчик сработает для любого сообщения, если оно не было обработано ранее
+# Удаляем или комментируем этот обработчик, так как пользователь больше не будет вводить текст после фото.
+# Если вы хотите, чтобы бот отвечал на текстовые сообщения, которые НЕ следуют за фото,
+# то создайте отдельный обработчик для handle_unhandled_messages, который не будет содержать condition
+# message.from_user.id in user_prompts.
+# @dp.message(lambda message: message.text and message.from_user.id in user_prompts)
+# async def handle_prompt(message: Message):
+#     pass # Больше не используется
+
+@dp.message()
 async def handle_unhandled_messages(message: Message):
     """
     Общий обработчик для сообщений, которые не были обработаны другими хендлерами.
     Предоставляет пользователю инструкции.
     """
-    logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}")
+    logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}") [cite: 11]
     if message.text:
-        await message.reply("Извините, я умею работать только с фотографиями рук. Пожалуйста, отправьте фото своей ладони, а затем напишите свой вопрос.")
+        await message.reply("Извините, я умею работать только с фотографиями рук. Пожалуйста, отправьте фото своей ладони.")
     else:
-        await message.reply("Извините, я могу анализировать только фотографии рук и отвечать на текстовые вопросы. Пожалуйста, отправьте фото.")
+        await message.reply("Извините, я могу анализировать только фотографии рук. Пожалуйста, отправьте фото.")
 
 
 if __name__ == "__main__":
-    import asyncio
     logging.info("Бот запускается...")
     asyncio.run(dp.start_polling(bot))
     logging.info("Бот остановлен.")
