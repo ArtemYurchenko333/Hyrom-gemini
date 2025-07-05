@@ -25,8 +25,7 @@ if not GEMINI_API_KEY:
     exit(1) # Выходим, если ключ не установлен
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Инициализация модели Gemini Pro Vision для работы с текстом и изображениями
-model = genai.GenerativeModel('gemini-pro-vision')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Словарь для хранения информации о запросах пользователей (например, ID фото)
 user_prompts = {}
