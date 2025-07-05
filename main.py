@@ -25,9 +25,6 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Модель Gemini
-# Используем 'gemini-1.5-flash' как рекомендованную для скорости и мультимодальности
-# Если 'gemini-2.0-flash' работает, можете оставить ее, но 'gemini-1.5-flash' - более стандартная рекомендация.
-# Оставим 'gemini-2.0-flash' как в вашем файле.
 model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Ваш предопределенный промт
@@ -100,12 +97,6 @@ async def handle_photo(message: Message):
             pass # Игнорируем ошибку, если сообщение уже удалено или не существует
         await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
 
-# Обработчик handle_prompt теперь не нужен, так как пользователь не вводит текстовый запрос после фото.
-# Его можно удалить или оставить закомментированным.
-# @dp.message(lambda message: message.text and message.from_user.id in user_prompts)
-# async def handle_prompt(message: Message):
-#     pass
-
 
 @dp.message()
 async def handle_unhandled_messages(message: Message):
@@ -113,4 +104,14 @@ async def handle_unhandled_messages(message: Message):
     Общий обработчик для сообщений, которые не были обработаны другими хендлерами.
     Предоставляет пользователю инструкции.
     """
-    logging.info(f"Необработанное сообщение от пользователя {message.from
+    logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}")
+    if message.text:
+        await message.reply("Извините, я умею работать только с фотографиями рук. Пожалуйста, отправьте фото своей ладони.")
+    else:
+        await message.reply("Извините, я могу анализировать только фотографии рук. Пожалуйста, отправьте фото.")
+
+
+if __name__ == "__main__":
+    logging.info("Бот запускается...")
+    asyncio.run(dp.start_polling(bot))
+    logging.info("Бот остановлен.")
