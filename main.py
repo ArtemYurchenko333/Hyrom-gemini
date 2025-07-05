@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Получение токенов из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # Изменено на GEMINI_API_KEY
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4") # Изменено на GEMINI_API_KEY
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
