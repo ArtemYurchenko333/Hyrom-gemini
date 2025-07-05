@@ -18,6 +18,8 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
 DATABASE_URL = os.getenv("DATABASE_URL4")
+# НОВОЕ: Переменная окружения для ID чата администратора
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID") # Получаем ID администратора
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
@@ -44,6 +46,42 @@ PREDEFINED_PROMPT = """Проанализируй ладони по предос
 - рекомендации для гармоничного раскрытия моих способностей.
 
 Пиши професссонально, с опорой на системный подход и лучшие практики анализа ладони. Избегай общих фраз - стремись к конкретике и точности"""
+
+# Максимальное количество символов в одном сообщении Telegram
+# Для обычных текстовых сообщений это 4096. Для подписей к фото/видео - 1024.
+# Поскольку наш ответ - это чистый текст, используем 4096.
+TELEGRAM_MESSAGE_MAX_LENGTH = 4096
+
+# --- Вспомогательные функции ---
+
+def split_text_into_chunks(text: str, chunk_size: int) -> list[str]:
+    """
+    Разбивает текст на части (чанками) по заданному размеру,
+    стараясь не разрывать слова на середине.
+    """
+    chunks = []
+    while text:
+        if len(text) <= chunk_size:
+            chunks.append(text)
+            break
+
+        # Ищем ближайший пробел или знак препинания к chunk_size
+        split_index = text.rfind(' ', 0, chunk_size)
+        if split_index == -1: # Если пробелов нет, режем жестко
+            split_index = chunk_size
+        
+        # Убедимся, что мы не создаем пустой чанк или чанк только с пробелами
+        chunk = text[:split_index].strip()
+        if not chunk and split_index < len(text): # Если чанк пуст, но текст еще есть, сдвинемся вперед
+            split_index = text.find(' ', chunk_size) # Ищем первый пробел после chunk_size
+            if split_index == -1: # Если пробелов после chunk_size нет, берем весь остаток
+                split_index = len(text)
+            chunk = text[:split_index].strip()
+
+        chunks.append(chunk)
+        text = text[split_index:].strip() # Удаляем отправленную часть и убираем пробелы в начале
+
+    return [chunk for chunk in chunks if chunk] # Убираем возможные пустые чанки
 
 # --- Функции для работы с базой данных ---
 
@@ -73,7 +111,6 @@ def init_db(db_url):
             );
         """)
         # Таблица для фотографий ладоней
-        # ДОБАВЛЕНЫ ПОЛЯ first_name, last_name, telegram_username
         cur.execute("""
             CREATE TABLE IF NOT EXISTS palm_photos (
                 id SERIAL PRIMARY KEY,
@@ -86,7 +123,6 @@ def init_db(db_url):
             );
         """)
         # Таблица для ответов хиромантии
-        # ДОБАВЛЕНЫ ПОЛЯ first_name, last_name, telegram_username
         cur.execute("""
             CREATE TABLE IF NOT EXISTS palm_readings (
                 id SERIAL PRIMARY KEY,
@@ -145,7 +181,6 @@ def get_or_create_user_db(db_url: str, user: User) -> int:
         if conn:
             conn.close()
 
-# ИЗМЕНЕНА ФУНКЦИЯ: save_photo_info_db теперь принимает first_name, last_name, telegram_username
 def save_photo_info_db(db_url: str, user_id: int, telegram_file_id: str, first_name: str, last_name: str, telegram_username: str) -> int:
     """Сохраняет информацию о фотографии ладони в БД, включая данные пользователя."""
     conn = None
@@ -173,7 +208,6 @@ def save_photo_info_db(db_url: str, user_id: int, telegram_file_id: str, first_n
         if conn:
             conn.close()
 
-# ИЗМЕНЕНА ФУНКЦИЯ: save_ai_reading_db теперь принимает first_name, last_name, telegram_username
 def save_ai_reading_db(db_url: str, user_id: int, photo_id: int, prompt_text: str, ai_response: str, first_name: str, last_name: str, telegram_username: str):
     """Сохраняет ответ ИИ по хиромантии в БД, включая данные пользователя."""
     conn = None
@@ -198,6 +232,24 @@ def save_ai_reading_db(db_url: str, user_id: int, photo_id: int, prompt_text: st
         if conn:
             conn.close()
 
+# --- Новая функция для загрузки файла по file_id (из прошлого шага) ---
+async def download_file_by_id(file_id: str) -> BytesIO:
+    """
+    Загружает файл из Telegram по его file_id и возвращает его содержимое
+    в виде объекта BytesIO.
+    """
+    try:
+        file_info = await bot.get_file(file_id)
+        if not file_info.file_path:
+            raise ValueError(f"Не удалось получить file_path для file_id: {file_id}")
+
+        file_content_bytes_io = await bot.download_file(file_info.file_path)
+        logging.info(f"Файл с file_id {file_id} успешно загружен.")
+        return file_content_bytes_io
+    except Exception as e:
+        logging.error(f"Ошибка при загрузке файла по file_id {file_id}: {e}")
+        raise
+
 # --- Обработчики сообщений бота ---
 
 @dp.message(lambda message: message.photo)
@@ -207,6 +259,7 @@ async def handle_photo(message: Message):
     После получения фото показывает сообщение, ждет 3 секунды,
     затем отправляет предопределенный промт и фото в Gemini API,
     а также сохраняет данные в БД, включая имя, фамилию и ник.
+    Если установлен ADMIN_CHAT_ID, отправляет фото администратору.
     """
     user_id = message.from_user.id
     telegram_user = message.from_user
@@ -223,31 +276,52 @@ async def handle_photo(message: Message):
             telegram_user
         )
 
-        # ДОБАВЛЕНО: Извлекаем имя, фамилию и ник пользователя
         first_name = telegram_user.first_name if telegram_user.first_name else ""
         last_name = telegram_user.last_name if telegram_user.last_name else ""
         telegram_username = telegram_user.username if telegram_user.username else ""
 
-        # Измененное сообщение "Спасибо..."
         processing_message = await message.reply("Спасибо за предоставленное изображение! Идет обработка...")
 
-        # Задержка в 3 секунды для имитации обработки (уже была в коде)
         await asyncio.sleep(3)
 
         photo_file_id = message.photo[-1].file_id
         prompt_text = PREDEFINED_PROMPT
 
-        # Сохраняем информацию о фото в БД, передавая новые поля
+        # Сохраняем информацию о фото в БД
         photo_db_id = await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_photo_info_db,
             DATABASE_URL,
             user_id,
             photo_file_id,
-            first_name, # Передаем first_name
-            last_name,  # Передаем last_name
-            telegram_username # Передаем telegram_username
+            first_name,
+            last_name,
+            telegram_username
         )
+
+        # НОВОЕ: Отправка фото администратору
+        if ADMIN_CHAT_ID:
+            try:
+                # Загружаем фото для отправки администратору (потребует повторной загрузки, если не хотите кэшировать)
+                # Или можно использовать file_id напрямую, если бот уже имеет к нему доступ
+                # Для отправки file_id напрямую, можно отправить просто photo=photo_file_id,
+                # но для подписи с данными лучше иметь BytesIO
+                file_for_admin = await download_file_by_id(photo_file_id)
+                caption_for_admin = (
+                    f"Новое фото ладони от пользователя:\n"
+                    f"ID: {user_id}\n"
+                    f"Имя: {first_name} {last_name}\n"
+                    f"Ник: @{telegram_username if telegram_username else 'нет'}"
+                )
+                await bot.send_photo(
+                    chat_id=ADMIN_CHAT_ID,
+                    photo=file_for_admin, # Передаем BytesIO
+                    caption=caption_for_admin
+                )
+                logging.info(f"Фото от пользователя {user_id} отправлено администратору {ADMIN_CHAT_ID}.")
+            except Exception as admin_send_error:
+                logging.error(f"Не удалось отправить фото администратору {ADMIN_CHAT_ID}: {admin_send_error}")
+
 
         # Загрузка файла фотографии из Telegram и отправка в Gemini API
         file = await bot.get_file(photo_file_id)
@@ -268,7 +342,7 @@ async def handle_photo(message: Message):
         ai_response_text = response.text
         logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
 
-        # Сохраняем ответ ИИ в БД, передавая новые поля
+        # Сохраняем ответ ИИ в БД
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_ai_reading_db,
@@ -277,17 +351,21 @@ async def handle_photo(message: Message):
             photo_db_id,
             prompt_text,
             ai_response_text,
-            first_name, # Передаем first_name
-            last_name,  # Передаем last_name
-            telegram_username # Передаем telegram_username
+            first_name,
+            last_name,
+            telegram_username
         )
 
         # Удаляем сообщение "Идет обработка..." перед отправкой ответа
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
-        # Отправка ответа пользователю
-        await message.reply(ai_response_text)
+        # НОВОЕ: Отправка ответа пользователю, разбитого на части
+        chunks = split_text_into_chunks(ai_response_text, TELEGRAM_MESSAGE_MAX_LENGTH)
+        for chunk in chunks:
+            await message.reply(chunk)
+            # Небольшая задержка между частями, чтобы избежать проблем с флудом API Telegram
+            await asyncio.sleep(0.5)
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
@@ -296,6 +374,7 @@ async def handle_photo(message: Message):
                 await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
             except Exception:
                 pass
+        # НОВОЕ: Текст ошибки на русском
         await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
 
 
@@ -306,7 +385,7 @@ async def handle_unhandled_messages(message: Message):
     Предоставляет пользователю инструкции.
     """
     logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}")
-    # ИЗМЕНЕН ТЕКСТ СООБЩЕНИЯ
+    # НОВОЕ: Текст ошибки на русском
     await message.reply("Пожалуйста, поделитесь фотографией вашей ладони для анализа. Я могу анализировать только изображения рук.")
 
 
@@ -314,6 +393,18 @@ if __name__ == "__main__":
     if not DATABASE_URL:
         logging.error("DATABASE_URL не установлен. Пожалуйста, установите его в переменных окружения.")
         exit(1)
+
+    # Добавляем проверку для ADMIN_CHAT_ID
+    if ADMIN_CHAT_ID:
+        try:
+            # Попытаемся преобразовать в int, чтобы убедиться, что это корректный ID
+            int(ADMIN_CHAT_ID)
+        except ValueError:
+            logging.error("ADMIN_CHAT_ID должен быть числовым ID чата. Проверьте переменную окружения.")
+            exit(1)
+    else:
+        logging.warning("ADMIN_CHAT_ID не установлен. Фотографии не будут отправляться администратору.")
+
 
     logging.info("Бот запускается...")
     try:
