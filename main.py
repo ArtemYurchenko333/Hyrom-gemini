@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, User, BufferedInputFile # ИМПОРТИРУЕМ BufferedInputFile
+from aiogram.types import Message, User, BufferedInputFile # Импортируем BufferedInputFile
 from io import BytesIO
 import google.generativeai as genai
 from PIL import Image
@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
 DATABASE_URL = os.getenv("DATABASE_URL4")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID") # Получаем ID администратора
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
@@ -227,10 +227,12 @@ async def handle_photo(message: Message):
     user_id = message.from_user.id
     telegram_user = message.from_user
     processing_message = None
+    ai_response_text = "" # Инициализируем на случай ошибок до получения ответа
 
     try:
         logging.info(f"Получено фото от пользователя {user_id}")
 
+        # Получаем или создаем пользователя в БД
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             get_or_create_user_db,
@@ -244,11 +246,12 @@ async def handle_photo(message: Message):
 
         processing_message = await message.reply("Спасибо за предоставленное изображение! Идет обработка...")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(3) # Задержка для имитации "обработки"
 
         photo_file_id = message.photo[-1].file_id
         prompt_text = PREDEFINED_PROMPT
 
+        # Сохраняем информацию о фото в БД
         photo_db_id = await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_photo_info_db,
@@ -260,14 +263,13 @@ async def handle_photo(message: Message):
             telegram_username
         )
 
-        # ИЗМЕНЕНИЕ ЗДЕСЬ: Оборачиваем BytesIO в BufferedInputFile
+        # Отправка фото администратору
         if ADMIN_CHAT_ID:
             try:
                 file_for_admin_bytes_io = await download_file_by_id(photo_file_id)
-                # СОЗДАЕМ BufferedInputFile ИЗ BytesIO
                 buffered_file_for_admin = BufferedInputFile(
-                    file=file_for_admin_bytes_io.getvalue(), # Получаем байты из BytesIO
-                    filename=f"palm_photo_{user_id}_{photo_db_id}.jpg" # Указываем имя файла
+                    file=file_for_admin_bytes_io.getvalue(),
+                    filename=f"palm_photo_{user_id}_{photo_db_id}.jpg"
                 )
                 caption_for_admin = (
                     f"Новое фото ладони от пользователя:\n"
@@ -277,7 +279,7 @@ async def handle_photo(message: Message):
                 )
                 await bot.send_photo(
                     chat_id=ADMIN_CHAT_ID,
-                    photo=buffered_file_for_admin, # Передаем BufferedInputFile
+                    photo=buffered_file_for_admin,
                     caption=caption_for_admin
                 )
                 logging.info(f"Фото от пользователя {user_id} отправлено администратору {ADMIN_CHAT_ID}.")
@@ -285,6 +287,7 @@ async def handle_photo(message: Message):
                 logging.error(f"Не удалось отправить фото администратору {ADMIN_CHAT_ID}: {admin_send_error}")
 
 
+        # Загрузка файла фотографии из Telegram и отправка в Gemini API
         file = await bot.get_file(photo_file_id)
         file_bytes_io = await bot.download_file(file.file_path)
         file_content = file_bytes_io.read()
@@ -297,12 +300,20 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                "max_output_tokens": 800,
+                "max_output_tokens": 800, # Установлено 800 токенов для одного сообщения
             }
         )
         ai_response_text = response.text
         logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
 
+        # Проверка и перевод сообщения об ошибке от Gemini
+        if "I am unable to analyze the palms of the person in the image as it is an image of a cat." in ai_response_text:
+            ai_response_text = "К сожалению, мне не удалось проанализировать изображение. Пожалуйста, убедитесь, что на фотографии четко видны ладони, и попробуйте снова."
+        elif "Unsupported image type" in ai_response_text or "image not clearly visible" in ai_response_text:
+             ai_response_text = "К сожалению, изображение нечеткое или не поддерживается. Пожалуйста, загрузите четкое фото ладони."
+        # Добавьте сюда другие известные сообщения об ошибках от Gemini, если появятся.
+
+        # Сохраняем ответ ИИ в БД (уже обработанный текст)
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_ai_reading_db,
@@ -316,9 +327,11 @@ async def handle_photo(message: Message):
             telegram_username
         )
 
+        # Удаляем сообщение "Идет обработка..." перед отправкой ответа
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
+        # Отправляем ответ пользователю
         await message.reply(ai_response_text)
 
     except Exception as e:
@@ -328,6 +341,7 @@ async def handle_photo(message: Message):
                 await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
             except Exception:
                 pass
+        # Общая ошибка, отправляемая пользователю на русском
         await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
 
 
@@ -338,6 +352,7 @@ async def handle_unhandled_messages(message: Message):
     Предоставляет пользователю инструкции.
     """
     logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}")
+    # Сообщение-инструкция для пользователя на русском
     await message.reply("Пожалуйста, поделитесь фотографией вашей ладони для анализа. Я могу анализировать только изображения рук.")
 
 
@@ -348,6 +363,7 @@ if __name__ == "__main__":
 
     if ADMIN_CHAT_ID:
         try:
+            # Проверяем, что ADMIN_CHAT_ID является числом
             int(ADMIN_CHAT_ID)
         except ValueError:
             logging.error("ADMIN_CHAT_ID должен быть числовым ID чата. Проверьте переменную окружения.")
@@ -358,10 +374,11 @@ if __name__ == "__main__":
 
     logging.info("Бот запускается...")
     try:
-        init_db(DATABASE_URL)
+        init_db(DATABASE_URL) # Инициализация базы данных
     except Exception as e:
         logging.error(f"Не удалось инициализировать базу данных: {e}. Бот не будет запущен.")
         exit(1)
 
+    # Запуск бота в режиме long polling
     asyncio.run(dp.start_polling(bot))
     logging.info("Бот остановлен.")
