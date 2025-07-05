@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, User, BufferedInputFile # Импортируем BufferedInputFile
+from aiogram.types import Message, User, BufferedInputFile
 from io import BytesIO
 import google.generativeai as genai
 from PIL import Image
@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN4")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY4")
 DATABASE_URL = os.getenv("DATABASE_URL4")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID") # Получаем ID администратора
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 # Инициализация бота Aiogram
 bot = Bot(token=BOT_TOKEN)
@@ -45,6 +45,9 @@ PREDEFINED_PROMPT = """Проанализируй ладони по предос
 - рекомендации для гармоничного раскрытия моих способностей.
 
 Пиши професссонально, с опорой на системный подход и лучшие практики анализа ладони. Избегай общих фраз - стремись к конкретике и точности"""
+
+# Максимальное количество символов в одном сообщении Telegram
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 # --- Функции для работы с базой данных ---
 
@@ -212,6 +215,19 @@ async def download_file_by_id(file_id: str) -> BytesIO:
         logging.error(f"Ошибка при загрузке файла по file_id {file_id}: {e}")
         raise
 
+def split_text_into_chunks(text: str, max_length: int) -> list[str]:
+    """Разбивает текст на части, чтобы каждая часть не превышала max_length."""
+    chunks = []
+    current_chunk = ""
+    for paragraph in text.split('\n'):
+        if len(current_chunk) + len(paragraph) + 1 > max_length: # +1 для переноса строки
+            chunks.append(current_chunk.strip())
+            current_chunk = paragraph
+        else:
+            current_chunk += ('\n' + paragraph if current_chunk else paragraph)
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    return chunks
 
 # --- Обработчики сообщений бота ---
 
@@ -300,7 +316,7 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                "max_output_tokens": 800, # Установлено 800 токенов для одного сообщения
+                "max_output_tokens": 800, # Оставляем 800 токенов для более сжатого ответа
             }
         )
         ai_response_text = response.text
@@ -331,8 +347,13 @@ async def handle_photo(message: Message):
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
-        # Отправляем ответ пользователю
-        await message.reply(ai_response_text)
+        # Разбиваем ответ на части и отправляем каждую часть
+        chunks = split_text_into_chunks(ai_response_text, TELEGRAM_MAX_MESSAGE_LENGTH)
+        for i, chunk in enumerate(chunks):
+            # Можно добавить нумерацию частей, если их много, например:
+            # await message.reply(f"Часть {i+1}/{len(chunks)}:\n{chunk}")
+            await message.reply(chunk)
+            await asyncio.sleep(0.5) # Небольшая задержка между сообщениями, чтобы избежать флуда
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
