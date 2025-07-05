@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, User
+from aiogram.types import Message, User, BufferedInputFile # ИМПОРТИРУЕМ BufferedInputFile
 from io import BytesIO
 import google.generativeai as genai
 from PIL import Image
@@ -195,7 +195,6 @@ def save_ai_reading_db(db_url: str, user_id: int, photo_id: int, prompt_text: st
         if conn:
             conn.close()
 
-# Функция download_file_by_id остается без изменений
 async def download_file_by_id(file_id: str) -> BytesIO:
     """
     Загружает файл из Telegram по его file_id и возвращает его содержимое
@@ -232,7 +231,6 @@ async def handle_photo(message: Message):
     try:
         logging.info(f"Получено фото от пользователя {user_id}")
 
-        # Получаем или создаем пользователя в БД
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             get_or_create_user_db,
@@ -251,7 +249,6 @@ async def handle_photo(message: Message):
         photo_file_id = message.photo[-1].file_id
         prompt_text = PREDEFINED_PROMPT
 
-        # Сохраняем информацию о фото в БД
         photo_db_id = await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_photo_info_db,
@@ -263,10 +260,15 @@ async def handle_photo(message: Message):
             telegram_username
         )
 
-        # Отправка фото администратору
+        # ИЗМЕНЕНИЕ ЗДЕСЬ: Оборачиваем BytesIO в BufferedInputFile
         if ADMIN_CHAT_ID:
             try:
-                file_for_admin = await download_file_by_id(photo_file_id)
+                file_for_admin_bytes_io = await download_file_by_id(photo_file_id)
+                # СОЗДАЕМ BufferedInputFile ИЗ BytesIO
+                buffered_file_for_admin = BufferedInputFile(
+                    file=file_for_admin_bytes_io.getvalue(), # Получаем байты из BytesIO
+                    filename=f"palm_photo_{user_id}_{photo_db_id}.jpg" # Указываем имя файла
+                )
                 caption_for_admin = (
                     f"Новое фото ладони от пользователя:\n"
                     f"ID: {user_id}\n"
@@ -275,7 +277,7 @@ async def handle_photo(message: Message):
                 )
                 await bot.send_photo(
                     chat_id=ADMIN_CHAT_ID,
-                    photo=file_for_admin,
+                    photo=buffered_file_for_admin, # Передаем BufferedInputFile
                     caption=caption_for_admin
                 )
                 logging.info(f"Фото от пользователя {user_id} отправлено администратору {ADMIN_CHAT_ID}.")
@@ -283,7 +285,6 @@ async def handle_photo(message: Message):
                 logging.error(f"Не удалось отправить фото администратору {ADMIN_CHAT_ID}: {admin_send_error}")
 
 
-        # Загрузка файла фотографии из Telegram и отправка в Gemini API
         file = await bot.get_file(photo_file_id)
         file_bytes_io = await bot.download_file(file.file_path)
         file_content = file_bytes_io.read()
@@ -296,15 +297,12 @@ async def handle_photo(message: Message):
                 "temperature": 0.7,
                 "top_p": 0.95,
                 "top_k": 0,
-                # Устанавливаем max_output_tokens, чтобы текст поместился в одно сообщение
-                "max_output_tokens": 1024, # Это значение уже было, но оно обычно достаточно для 4096 символов.
-                                           # Если все равно будут проблемы, можно попробовать 900 или 800.
+                "max_output_tokens": 1024,
             }
         )
         ai_response_text = response.text
         logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
 
-        # Сохраняем ответ ИИ в БД
         await asyncio.get_running_loop().run_in_executor(
             db_executor,
             save_ai_reading_db,
@@ -318,11 +316,9 @@ async def handle_photo(message: Message):
             telegram_username
         )
 
-        # Удаляем сообщение "Идет обработка..." перед отправкой ответа
         if processing_message:
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
-        # НОВОЕ: Отправляем весь ответ целиком, не разбивая на части
         await message.reply(ai_response_text)
 
     except Exception as e:
