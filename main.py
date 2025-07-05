@@ -310,6 +310,8 @@ async def handle_photo(message: Message):
         img = Image.open(BytesIO(file_content))
 
         logging.info(f"Отправка запроса в Gemini API для пользователя {user_id} с предопределенным промтом.")
+        
+        # Попробуем сгенерировать контент
         response = await model.generate_content_async(
             [prompt_text, img],
             generation_config={
@@ -317,24 +319,52 @@ async def handle_photo(message: Message):
                 "top_p": 0.95,
                 "top_k": 0,
                 "max_output_tokens": 800, # Оставляем 800 токенов для более сжатого ответа
-            }
+            },
+            stream=False # Убедимся, что не стримим, чтобы получить полный response сразу
         )
-        ai_response_text = response.text
-        logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
 
-        try:
+        # Проверка, есть ли текст в ответе или это был отказ
+        if response.candidates:
             ai_response_text = response.text.strip()
-            # Примитивная фильтрация ошибок по ключевым словам
-            lower_response = ai_response_text.lower()
-            if "cat" in lower_response or "animal" in lower_response:
-                ai_response_text = "К сожалению, изображение содержит животное. Пожалуйста, загрузите фото ладони."
-            elif "unsupported" in lower_response or "not clearly visible" in lower_response or "image" in lower_response:
-                ai_response_text = "К сожалению, изображение не удалось распознать. Пожалуйста, загрузите четкое фото ладони."
-            elif not ai_response_text:
-                ai_response_text = "К сожалению, анализ не удался. Пожалуйста, попробуйте позже с другим фото."
-        except Exception as e:
-            logging.error(f"Ошибка при извлечении текста Gemini: {e}")
-            ai_response_text = "Возникла ошибка при получении ответа от ИИ. Попробуйте позже."
+            logging.info(f"Получен ответ от Gemini API для пользователя {user_id}")
+            
+            # Добавим более специфичную проверку на отсутствие текста или конкретные причины отказа
+            if not ai_response_text:
+                # Если Gemini не выдал текст, но и не было явной ошибки в response.text
+                # Проверяем причины отказа кандидата, если они есть
+                if hasattr(response.candidates[0], 'finish_reason'):
+                    finish_reason = response.candidates[0].finish_reason
+                    logging.warning(f"Gemini response has no text. Finish reason: {finish_reason}")
+                    if finish_reason == genai.protos.FinishReason.SAFETY or \
+                       finish_reason == genai.protos.FinishReason.OTHER or \
+                       finish_reason == genai.protos.FinishReason.RECITATION: # RECITATION может быть, если модель отказывается генерировать
+                        ai_response_text = "На изображении не удалось распознать руку или оно содержит неподходящий контент."
+                    else:
+                        ai_response_text = "К сожалению, анализ не удался. Пожалуйста, попробуйте позже с другим фото."
+                else:
+                    ai_response_text = "К сожалению, анализ не удался. Пожалуйста, попробуйте позже с другим фото."
+        else:
+            # Если candidates пуст, это обычно означает отказ из-за безопасности или других проблем
+            logging.warning(f"Gemini did not return any candidates. Prompt feedback: {response.prompt_feedback}")
+            ai_response_text = "На изображении не удалось распознать руку или оно содержит неподходящий контент."
+
+
+        # Также сохраним старую проверку на случай, если Gemini все же вернет текстовую ошибку
+        # Это более грубый метод, но может поймать edge-кейсы
+        lower_response = ai_response_text.lower()
+        if "i am unable to analyze the palms of the person in the image as it is an image of a cat." in lower_response:
+            ai_response_text = "К сожалению, мне не удалось проанализировать изображение. Пожалуйста, убедитесь, что на фотографии четко видны ладони, и попробуйте снова."
+        elif "unsupported image type" in lower_response or "image not clearly visible" in lower_response:
+             ai_response_text = "К сожалению, изображение нечеткое или не поддерживается. Пожалуйста, загрузите четкое фото ладони."
+        
+        # Если ai_response_text все еще содержит общее английское сообщение об ошибке, которое не было явно обработано
+        # И оно не было переведено выше, то можно добавить общую фразу
+        if "error" in lower_response or "unable to" in lower_response:
+            if "не удалось распознать руку" not in ai_response_text and \
+               "нечеткое или не поддерживается" not in ai_response_text and \
+               "анализ не удался" not in ai_response_text:
+                ai_response_text = "Произошла ошибка при обработке изображения. Пожалуйста, убедитесь, что на фотографии четко видна ладонь и попробуйте еще раз."
+
 
         # Сохраняем ответ ИИ в БД (уже обработанный текст)
         await asyncio.get_running_loop().run_in_executor(
