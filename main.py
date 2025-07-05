@@ -1,6 +1,6 @@
 import os
 import logging
-import asyncio # Импортируем asyncio для задержки
+import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from io import BytesIO
@@ -24,7 +24,10 @@ if not GEMINI_API_KEY:
     exit(1)
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Модель Gemini (уже была изменена на 'gemini-2.0-flash', это хорошо)
+# Модель Gemini
+# Используем 'gemini-1.5-flash' как рекомендованную для скорости и мультимодальности
+# Если 'gemini-2.0-flash' работает, можете оставить ее, но 'gemini-1.5-flash' - более стандартная рекомендация.
+# Оставим 'gemini-2.0-flash' как в вашем файле.
 model = genai.GenerativeModel('gemini-2.0-flash')
 
 # Ваш предопределенный промт
@@ -62,17 +65,17 @@ async def handle_photo(message: Message):
 
     try:
         # Загрузка файла фотографии из Telegram
-        file = await bot.get_file(photo_file_id) [cite: 6]
-        file_bytes_io = await bot.download_file(file.file_path) [cite: 6]
-        file_content = file_bytes_io.read() [cite: 6]
+        file = await bot.get_file(photo_file_id)
+        file_bytes_io = await bot.download_file(file.file_path)
+        file_content = file_bytes_io.read()
 
         # Преобразование байтов изображения в объект PIL Image
-        img = Image.open(BytesIO(file_content)) [cite: 6]
+        img = Image.open(BytesIO(file_content))
 
         logging.info(f"Отправка запроса в Gemini API для пользователя {user_id} с предопределенным промтом.")
         # Отправка запроса в Gemini API
         response = await model.generate_content_async(
-            [prompt_text, img], # Передаем предопределенный промт и изображение [cite: 7]
+            [prompt_text, img], # Передаем предопределенный промт и изображение
             generation_config={
                 "temperature": 0.7,
                 "top_p": 0.95,
@@ -86,7 +89,7 @@ async def handle_photo(message: Message):
         await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
 
         # Отправка ответа пользователю
-        await message.reply(response.text) [cite: 9]
+        await message.reply(response.text)
 
     except Exception as e:
         logging.error(f"Ошибка при обработке запроса для пользователя {user_id}: {e}")
@@ -95,15 +98,14 @@ async def handle_photo(message: Message):
             await bot.delete_message(chat_id=processing_message.chat.id, message_id=processing_message.message_id)
         except Exception:
             pass # Игнорируем ошибку, если сообщение уже удалено или не существует
-        await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.") [cite: 10]
+        await message.reply("Произошла ошибка при анализе руки. Пожалуйста, попробуйте еще раз позже.")
 
-# Удаляем или комментируем этот обработчик, так как пользователь больше не будет вводить текст после фото.
-# Если вы хотите, чтобы бот отвечал на текстовые сообщения, которые НЕ следуют за фото,
-# то создайте отдельный обработчик для handle_unhandled_messages, который не будет содержать condition
-# message.from_user.id in user_prompts.
+# Обработчик handle_prompt теперь не нужен, так как пользователь не вводит текстовый запрос после фото.
+# Его можно удалить или оставить закомментированным.
 # @dp.message(lambda message: message.text and message.from_user.id in user_prompts)
 # async def handle_prompt(message: Message):
-#     pass # Больше не используется
+#     pass
+
 
 @dp.message()
 async def handle_unhandled_messages(message: Message):
@@ -111,14 +113,4 @@ async def handle_unhandled_messages(message: Message):
     Общий обработчик для сообщений, которые не были обработаны другими хендлерами.
     Предоставляет пользователю инструкции.
     """
-    logging.info(f"Необработанное сообщение от пользователя {message.from_user.id}: {message.text or message.content_type}") [cite: 11]
-    if message.text:
-        await message.reply("Извините, я умею работать только с фотографиями рук. Пожалуйста, отправьте фото своей ладони.")
-    else:
-        await message.reply("Извините, я могу анализировать только фотографии рук. Пожалуйста, отправьте фото.")
-
-
-if __name__ == "__main__":
-    logging.info("Бот запускается...")
-    asyncio.run(dp.start_polling(bot))
-    logging.info("Бот остановлен.")
+    logging.info(f"Необработанное сообщение от пользователя {message.from
