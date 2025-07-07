@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+from typing import Optional, List
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message, User, BufferedInputFile
 from io import BytesIO
@@ -133,7 +134,10 @@ def get_or_create_user_db(db_url: str, user: User) -> int:
                 """,
                 (user.id, user.username, user.first_name, user.last_name)
             )
-            user_id = cur.fetchone()[0]
+            result = cur.fetchone()
+            if result is None:
+                raise ValueError("Не удалось создать пользователя в базе данных")
+            user_id = result[0]
             conn.commit()
             logging.info(f"Новый пользователь {user_id} ({user.username}) добавлен в базу данных.")
         else:
@@ -163,7 +167,10 @@ def save_photo_info_db(db_url: str, user_id: int, telegram_file_id: str, first_n
             """,
             (user_id, telegram_file_id, first_name, last_name, telegram_username)
         )
-        photo_id = cur.fetchone()[0]
+        result = cur.fetchone()
+        if result is None:
+            raise ValueError("Не удалось сохранить информацию о фото в базе данных")
+        photo_id = result[0]
         conn.commit()
         logging.info(f"Информация о фото (file_id: {telegram_file_id}) для пользователя {user_id} сохранена с photo_id {photo_id}.")
         return photo_id
@@ -284,6 +291,10 @@ async def handle_photo(message: Message):
 
     try:
         logging.info(f"Получено фото от пользователя {user_id}")
+
+        # Проверяем, что DATABASE_URL не None
+        if not DATABASE_URL:
+            raise ValueError("DATABASE_URL не установлен")
 
         # Получаем или создаем пользователя в БД
         await asyncio.get_running_loop().run_in_executor(
