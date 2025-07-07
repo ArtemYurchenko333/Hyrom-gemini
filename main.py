@@ -7,6 +7,7 @@ from aiogram.types import Message, User, BufferedInputFile
 from io import BytesIO
 import google.generativeai as genai
 from PIL import Image
+import re
 
 import psycopg2
 from psycopg2 import sql
@@ -273,6 +274,22 @@ def split_text_into_chunks(text: str, max_length: int) -> list[str]:
     
     return chunks
 
+async def translate_to_russian(text: str) -> str:
+    """Переводит текст на русский язык с помощью Gemini API."""
+    translate_prompt = f"Переведи на русский язык, сохраняя смысл и стиль:\n\n{text}"
+    response = await model.generate_content_async(
+        [translate_prompt],
+        generation_config={
+            "temperature": 0.3,
+            "max_output_tokens": 2048,
+        },
+        stream=False
+    )
+    return response.text.strip() if response.text else text
+
+def is_russian(text: str) -> bool:
+    return bool(re.search(r'[а-яА-Я]', text))
+
 # --- Обработчики сообщений бота ---
 
 @dp.message(lambda message: message.photo)
@@ -429,6 +446,14 @@ async def handle_photo(message: Message):
             # Если не было найдено конкретного паттерна, но есть общие слова ошибок
             if not any(pattern in lower_response for pattern in error_patterns.keys()):
                 ai_response_text = "Произошла ошибка при обработке изображения. Пожалуйста, убедитесь, что на фотографии четко видна ладонь и попробуйте еще раз."
+
+        # --- Новый блок: автоперевод на русский, если ответ не на русском ---
+        if not is_russian(ai_response_text):
+            try:
+                ai_response_text = await translate_to_russian(ai_response_text)
+            except Exception as translate_error:
+                logging.error(f"Ошибка при автопереводе на русский: {translate_error}")
+                ai_response_text = ai_response_text + "\n\n(Не удалось автоматически перевести на русский язык)"
 
         # Сохраняем ответ ИИ в БД (уже обработанный текст)
         await asyncio.get_running_loop().run_in_executor(
