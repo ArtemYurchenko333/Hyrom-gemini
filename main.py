@@ -34,7 +34,7 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Модель Gemini
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Ваш предопределенный промт
 PREDEFINED_PROMPT = """Проанализируй ладони по предоставленным фотографиям, используя опыт профессиональной хиромантии.
