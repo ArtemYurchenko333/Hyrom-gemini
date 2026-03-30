@@ -30,7 +30,7 @@ if not GEMINI_API_KEY:
     exit(1)
  
 client = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-1.5-flash-latest"
  
 PREDEFINED_PROMPT = """Проанализируй ладони по предоставленным фотографиям, используя опыт профессиональной хиромантии.
  
