@@ -5,7 +5,8 @@ from typing import Optional, List
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message, User, BufferedInputFile
 from io import BytesIO
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 import re
 
